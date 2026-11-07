@@ -1,5 +1,26 @@
 # Payaz Label Station (tablet version)
 
+## Install the Android app
+
+On the Lenovo tablet, open this link in Chrome and install the file it downloads:
+
+**https://github.com/colin-payaz/payaz-label-station/releases/latest/download/payaz-labels.apk**
+
+The first time, Android asks you to allow installing apps from Chrome: tap **Settings**,
+turn on **Allow from this source**, then go back and tap **Install**. Open **Payaz Labels**,
+tap **Connect printer**, allow **Nearby devices**, and choose the printer (it starts with **T0**).
+
+The app reconnects to the same printer by itself each time it opens, runs full screen
+and keeps the screen on. To update it, download and install the latest APK the same way.
+Your settings are kept.
+
+The APK is built automatically by GitHub Actions (`.github/workflows/android.yml`) on every
+push to `main`, and published under **Releases**. It's signed with the key in the
+`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` repository secrets. Without them,
+the build makes a test app with a temporary key.
+
+## Or use it as a web app
+
 Prints Payaz order, SumUp reader and tablet serial labels on a **SUPVAN T50M Pro**
 from a **Lenovo tablet**, over Bluetooth. No Raspberry Pi, cables or computer needed.
 
