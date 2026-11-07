@@ -1,5 +1,5 @@
 import { renderLabel, LABEL_FONT } from "./labels.js";
-import { Printer, bluetoothSupported } from "./printer.js";
+import { Printer, bluetoothSupported, isNativeApp } from "./printer.js";
 
 const $ = (s) => document.querySelector(s);
 const TITLES = { order: "Payaz Order", sumup: "SumUp Card Reader", tablet: "Tablet", all: "Combined label" };
@@ -130,9 +130,30 @@ document.addEventListener("keydown", (e) => {
 
 /* ---------- camera scanning ---------- */
 let camStream = null, camTimer = null;
-const hasCamera = "BarcodeDetector" in window && navigator.mediaDevices;
+const NATIVE = isNativeApp();
+const hasCamera = NATIVE || ("BarcodeDetector" in window && navigator.mediaDevices);
 if (!hasCamera) $("#camBtn").style.display = "none";
+
+// In the Android app: Google's barcode scanner (ML Kit) opens full screen.
+async function nativeCameraScan() {
+  const scanner = window.Capacitor.Plugins.BarcodeScanner;
+  try {
+    const { available } = await scanner.isGoogleBarcodeScannerModuleAvailable();
+    if (!available) {
+      overlay("Getting the camera scanner ready…", "This only happens once and needs internet.", false, true);
+      await scanner.installGoogleBarcodeScannerModule();
+      for (let i = 0; i < 60 && !(await scanner.isGoogleBarcodeScannerModuleAvailable()).available; i++) await new Promise((r) => setTimeout(r, 1000));
+      hideOverlay();
+    }
+    const { barcodes } = await scanner.scan({ formats: ["CODE_128", "CODE_39", "CODE_93", "EAN_13", "UPC_A", "QR_CODE", "DATA_MATRIX"] });
+    if (barcodes && barcodes.length) acceptScan(barcodes[0].rawValue || barcodes[0].displayValue || "");
+  } catch (e) {
+    if (!/cancel/i.test(e && e.message)) overlay("Camera not available", (e && e.message) || "Use the barcode scanner instead.", true);
+  }
+}
+
 $("#camBtn").onclick = async () => {
+  if (NATIVE) return nativeCameraScan();
   try {
     const detector = new BarcodeDetector({ formats: ["code_128", "code_39", "ean_13", "qr_code", "data_matrix", "upc_a"] });
     camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1920 } } });
@@ -162,7 +183,7 @@ $("#camClose").onclick = closeCamera;
 async function connectFromTap() {
   if (!bluetoothSupported()) throw new Error("This browser can't use Bluetooth. Open the app in Google Chrome.");
   if (printer.connected) return;
-  if (printer.device) { await printer.connect(); return; }
+  if (printer.known && (await printer.findKnown())) return;
   await printer.choose();
 }
 
@@ -217,8 +238,12 @@ $("#disconnectBtn").onclick = () => printer.disconnect();
 $("#testBtn").onclick = async () => {
   if (await doPrint("all", { order: "12345PZ", sumup: "TEST123", tablet: "TEST456" }, 1)) setTimeout(hideOverlay, 1200);
 };
-// Reconnect quietly to the printer used last time, if Chrome allows it.
+// Reconnect quietly to the printer used last time.
 printer.findKnown().catch(() => {}).finally(drawPrinter);
+// In the app, also reconnect when it comes back to the front.
+document.addEventListener("visibilitychange", () => {
+  if (NATIVE && document.visibilityState === "visible" && !printer.connected && printer.known) printer.findKnown().catch(() => {});
+});
 
 /* ---------- overlay ---------- */
 function overlay(msg, sub, isErr, noBtn) {
@@ -257,11 +282,16 @@ function poke() { clearTimeout(idleTimer); idleTimer = setTimeout(() => { hideOv
 document.addEventListener("pointerdown", poke);
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 // Keep the screen on while the app is open
-async function keepAwake() { try { if ("wakeLock" in navigator) await navigator.wakeLock.request("screen"); } catch (e) {} }
+async function keepAwake() {
+  try {
+    if (NATIVE && window.Capacitor.Plugins.KeepAwake) await window.Capacitor.Plugins.KeepAwake.keepAwake();
+    else if ("wakeLock" in navigator) await navigator.wakeLock.request("screen");
+  } catch (e) {}
+}
 keepAwake();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") keepAwake(); });
 // Work offline once loaded
-if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+if (!NATIVE && "serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 
 // Load the label font before drawing any label
 const face = new FontFace(LABEL_FONT, "url(fonts/AtkinsonHyperlegible-Bold.ttf)");

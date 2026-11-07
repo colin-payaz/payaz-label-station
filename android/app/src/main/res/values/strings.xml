@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Payaz Labels</string>
+    <string name="title_activity_main">Payaz Labels</string>
+    <string name="package_name">com.payaz.labelstation</string>
+    <string name="custom_url_scheme">com.payaz.labelstation</string>
+</resources>

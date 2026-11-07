@@ -21,7 +21,116 @@ export const CMD = {
 
 export class PrinterError extends Error {}
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export const bluetoothSupported = () => typeof navigator !== "undefined" && "bluetooth" in navigator;
+/** True inside the Android app (Capacitor), false in a web browser. */
+export const isNativeApp = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+export const bluetoothSupported = () => isNativeApp() || (typeof navigator !== "undefined" && "bluetooth" in navigator);
+
+const toHex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, "0")).join("");
+function fromHex(s) {
+  const c = String(s || "").replace(/[^0-9a-f]/gi, "");
+  const out = new Uint8Array(c.length >> 1);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(c.substr(i * 2, 2), 16);
+  return out;
+}
+
+// ------------------------------------------------------------- links ---
+// Two ways to reach the printer, with the same shape:
+//   choose() / connectKnown() / write(bytes) / disconnect(), plus onData / onDisconnect.
+
+/** Chrome's Web Bluetooth (when the app runs as a website). */
+class WebLink {
+  constructor() {
+    this.device = null; this.writeChar = null; this.withoutResponse = false;
+    this.onData = () => {}; this.onDisconnect = () => {};
+    this._notify = (e) => { const v = e.target.value; if (v) this.onData(new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength))); };
+    this._gone = () => { this.writeChar = null; this.onDisconnect(); };
+  }
+  get connected() { return !!(this.device && this.device.gatt.connected && this.writeChar); }
+  get name() { return this.device ? this.device.name || "Label printer" : ""; }
+  get known() { return !!this.device; }
+  async choose() {
+    const d = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: NAME_PREFIX }], optionalServices: [SERVICE] });
+    await this.open(d);
+  }
+  async connectKnown() {
+    if (this.device) { await this.open(this.device); return true; }
+    if (!navigator.bluetooth.getDevices) return false;
+    const d = (await navigator.bluetooth.getDevices()).find((x) => (x.name || "").startsWith(NAME_PREFIX));
+    if (!d) return false;
+    await this.open(d);
+    return true;
+  }
+  async open(device) {
+    if (this.device && this.device !== device) this.device.removeEventListener("gattserverdisconnected", this._gone);
+    this.device = device;
+    device.addEventListener("gattserverdisconnected", this._gone);
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE);
+    this.writeChar = await service.getCharacteristic(WRITE_CHAR);
+    const notifyChar = await service.getCharacteristic(NOTIFY_CHAR);
+    notifyChar.addEventListener("characteristicvaluechanged", this._notify);
+    await notifyChar.startNotifications();
+    const p = this.writeChar.properties;
+    this.withoutResponse = p.writeWithoutResponse && !p.write;
+  }
+  async write(piece) {
+    if (this.withoutResponse) await this.writeChar.writeValueWithoutResponse(piece);
+    else await this.writeChar.writeValueWithResponse(piece);
+  }
+  async disconnect() { if (this.device && this.device.gatt.connected) this.device.gatt.disconnect(); this.writeChar = null; }
+}
+
+/** Android's own Bluetooth (inside the Android app), via @capacitor-community/bluetooth-le. */
+class NativeLink {
+  constructor() {
+    this.id = null; this.deviceName = ""; this.isConnected = false; this.ready = false; this.handles = [];
+    this.onData = () => {}; this.onDisconnect = () => {};
+    try { const saved = JSON.parse(localStorage.getItem("payaz-printer") || "null"); if (saved) { this.id = saved.id; this.deviceName = saved.name; } } catch (e) {}
+  }
+  get ble() { return window.Capacitor.Plugins.BluetoothLe; }
+  get connected() { return this.isConnected; }
+  get name() { return this.deviceName || "Label printer"; }
+  get known() { return !!this.id; }
+  async init() {
+    if (this.ready) return;
+    await this.ble.initialize({ androidNeverForLocation: true });
+    const { value } = await this.ble.isEnabled();
+    if (!value) {
+      try { await this.ble.requestEnable(); } catch (e) {}
+      if (!(await this.ble.isEnabled()).value) throw new PrinterError("Bluetooth is off. Turn it on in the tablet's settings.");
+    }
+    this.ready = true;
+  }
+  async choose() {
+    await this.init();
+    const d = await this.ble.requestDevice({ namePrefix: NAME_PREFIX, optionalServices: [SERVICE] });
+    await this.open(d.deviceId, d.name || "");
+  }
+  async connectKnown() {
+    if (!this.id) return false;
+    await this.init();
+    await this.open(this.id, this.deviceName);
+    return true;
+  }
+  async open(id, name) {
+    if (this.isConnected && this.id !== id) await this.disconnect();
+    for (const h of this.handles.splice(0)) h.remove();
+    this.id = id; this.deviceName = name;
+    try { localStorage.setItem("payaz-printer", JSON.stringify({ id, name })); } catch (e) {}
+    this.handles.push(await this.ble.addListener(`disconnected|${id}`, () => { this.isConnected = false; this.onDisconnect(); }));
+    await this.ble.connect({ deviceId: id, timeout: 15000 });
+    this.handles.push(await this.ble.addListener(`notification|${id}|${SERVICE}|${NOTIFY_CHAR}`, (e) => this.onData(fromHex(e && e.value))));
+    await this.ble.startNotifications({ deviceId: id, service: SERVICE, characteristic: NOTIFY_CHAR });
+    this.isConnected = true;
+  }
+  async write(piece) {
+    await this.ble.write({ deviceId: this.id, service: SERVICE, characteristic: WRITE_CHAR, value: toHex(piece) });
+  }
+  async disconnect() {
+    if (this.id && this.isConnected) { try { await this.ble.disconnect({ deviceId: this.id }); } catch (e) {} }
+    this.isConnected = false;
+  }
+}
 
 // ------------------------------------------------------------- framing ---
 const sum16 = (b, from, to) => { let s = 0; for (let i = from; i < to; i++) s += b[i]; return s & 0xffff; };
@@ -147,85 +256,54 @@ export function parseStatus(frame) {
 // ------------------------------------------------------------- printer ---
 export class Printer {
   constructor() {
-    this.device = null;
-    this.writeChar = null;
-    this.notifyChar = null;
-    this.withoutResponse = false;
+    this.link = isNativeApp() ? new NativeLink() : new WebLink();
+    this.link.onData = (chunk) => this._receive(chunk);
+    this.link.onDisconnect = () => this.onchange();
     this.frames = [];
     this.pending = new Uint8Array(0);
     this.wake = null;
     this.queue = Promise.resolve();
     this.onchange = () => {};
     this.paperType = 1; // die-cut labels
-    this._onNotify = (e) => {
-      const v = e.target.value;
-      if (v) this._receive(new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength)));
-    };
-    this._onDisconnect = () => { this.writeChar = null; this.onchange(); };
   }
 
-  get connected() { return !!(this.device && this.device.gatt && this.device.gatt.connected && this.writeChar); }
-  get name() { return this.device ? this.device.name || "Label printer" : ""; }
+  get connected() { return this.link.connected; }
+  get name() { return this.link.name; }
+  /** A printer has been chosen before (so no chooser is needed to reconnect). */
+  get known() { return this.link.known; }
 
-  /** Show Chrome's printer chooser. Must be called straight from a tap. */
-  async choose() {
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: NAME_PREFIX }], optionalServices: [SERVICE],
-    });
-    await this.connect(device);
-  }
+  /** Show the printer chooser. On the web it must be called straight from a tap. */
+  async choose() { await this.link.choose(); await this._afterConnect(); }
 
-  /** Reconnect to a printer chosen before (no chooser needed). */
+  /** Reconnect to the printer chosen before, without the chooser. */
   async findKnown() {
-    if (!bluetoothSupported() || !navigator.bluetooth.getDevices) return false;
-    const known = (await navigator.bluetooth.getDevices()).find((d) => (d.name || "").startsWith(NAME_PREFIX));
-    if (!known) return false;
-    await this.connect(known);
+    if (!bluetoothSupported()) return false;
+    if (!(await this.link.connectKnown())) return false;
+    await this._afterConnect();
     return true;
   }
 
-  async connect(device = this.device) {
-    if (!device) throw new PrinterError("No printer chosen yet");
-    if (this.device && this.device !== device) this.device.removeEventListener("gattserverdisconnected", this._onDisconnect);
-    this.device = device;
-    device.addEventListener("gattserverdisconnected", this._onDisconnect);
-    const server = await device.gatt.connect();
-    const service = await server.getPrimaryService(SERVICE);
-    this.writeChar = await service.getCharacteristic(WRITE_CHAR);
-    this.notifyChar = await service.getCharacteristic(NOTIFY_CHAR);
-    this.notifyChar.addEventListener("characteristicvaluechanged", this._onNotify);
-    await this.notifyChar.startNotifications();
-    const p = this.writeChar.properties;
-    this.withoutResponse = p.writeWithoutResponse && !p.write;
+  async _afterConnect() {
+    this._clear();
     await this.handshake();
     try {
       const m = await this.readMedia();
-      if (m && m.paperType !== undefined) this.paperType = m.paperType;
-      this.media = m;
+      if (m) { this.paperType = m.paperType; this.media = m; }
     } catch (e) { /* label info is optional */ }
     this.onchange();
   }
 
-  async disconnect() {
-    if (this.device && this.device.gatt.connected) this.device.gatt.disconnect();
-    this.writeChar = null;
-    this.onchange();
-  }
+  async disconnect() { await this.link.disconnect(); this.onchange(); }
 
   async ensureConnected() {
     if (this.connected) return;
-    if (this.device) return this.connect(this.device);
     if (await this.findKnown()) return;
     throw new PrinterError("No printer connected. Tap 'Connect printer' first.");
   }
 
   // ---- byte stream ----
   async _write(data) {
-    for (let o = 0; o < data.length; o += MAX_WRITE) {
-      const piece = data.slice(o, o + MAX_WRITE);
-      if (this.withoutResponse) await this.writeChar.writeValueWithoutResponse(piece);
-      else await this.writeChar.writeValueWithResponse(piece);
-    }
+    for (let o = 0; o < data.length; o += MAX_WRITE) await this.link.write(data.slice(o, o + MAX_WRITE));
   }
 
   _receive(chunk) {

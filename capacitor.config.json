@@ -1,0 +1,16 @@
+{
+  "appId": "com.payaz.labelstation",
+  "appName": "Payaz Labels",
+  "webDir": "www",
+  "android": { "backgroundColor": "#f3f6f8" },
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "Looking for the label printer…",
+        "cancel": "Cancel",
+        "availableDevices": "Choose the label printer",
+        "noDeviceFound": "No printer found - is it switched on?"
+      }
+    }
+  }
+}
