@@ -17,22 +17,22 @@ internet.
   - a USB scanner plugged in with a **USB‑C OTG adapter**
 - Or just use the tablet's **camera**: tap **Use camera** on any scan screen
 
-## Step 1: Put the app online (one time, about 5 minutes)
+## The app's web address
 
-Chrome only lets websites use Bluetooth if they're on a secure (https) web address, so the
-folder needs to be hosted. The free and easy way:
+**https://colin-payaz.github.io/payaz-label-station/**
 
-1. On a computer, unzip `payaz-label-tablet.zip`.
-2. Go to **app.netlify.com/drop** and create a free account.
-3. Drag the **payaz-label-tablet** folder onto the page.
-4. Netlify gives you a web address like `https://something.netlify.app`. In
-   **Site settings** you can rename it to something like `payaz-labels.netlify.app`.
+It's hosted free on GitHub Pages from this repository's `gh-pages` branch. To update the
+app, push changes to `main`, then update `gh-pages` to match:
 
-Any other web host that serves files over https works too (GitHub Pages, your own site).
+```bash
+git push origin main main:gh-pages
+```
+
+Then bump `VERSION` in `sw.js` so tablets pick up the change.
 
 ## Step 2: Set up the tablet
 
-1. Open **Chrome** on the tablet and go to your web address.
+1. Open **Chrome** on the tablet and go to **colin-payaz.github.io/payaz-label-station**.
 2. Tap Chrome's **⋮** menu, then **Add to Home screen** (or **Install app**).
 3. Open **Payaz Labels** from the home screen. It opens full screen.
 4. Switch the printer on and tap **Connect printer** (top right). Allow **Nearby devices**
