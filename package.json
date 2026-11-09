@@ -17,6 +17,7 @@
     "@capacitor/share": "8.0.3"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.6.0"
+    "@capacitor/cli": "8.6.0",
+    "qrcode-generator": "2.0.4"
   }
 }

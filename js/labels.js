@@ -2,6 +2,8 @@
 // Draws each label at the printer's native 203 dpi (8 dots per mm) so barcode
 // bars land exactly on printer dots, then turns it into 1-bit dots.
 
+import qrcode from "./qrcode.js"; // QR Code Generator by Kazuhiko Arase (MIT)
+
 export const LABEL_FONT = "PayazLabel"; // Atkinson Hyperlegible Bold (loaded in app.js)
 
 // ---------------------------------------------------------------- Code 128 ---
@@ -69,11 +71,17 @@ function drawBarcode(ctx, text, x0, y0, x1, y1) {
   if (m < 1) return false;
   m = Math.min(m, 4);
   const width = mods.length * m;
-  let x = x0 + Math.floor((avail - width) / 2);
+  const left = x0 + Math.floor((avail - width) / 2);
+  // Thermal printers spread each black bar a little (dot gain), filling in the
+  // thin gaps. Print every bar slightly narrower so it comes out the right width.
+  const thin = m >= 2 ? Math.max(1, Math.floor(m / 2)) : 0;
   ctx.fillStyle = "#000";
-  for (const bit of mods) {
-    if (bit === "1") ctx.fillRect(x, y0, m, y1 - y0);
-    x += m;
+  for (let i = 0; i < mods.length;) {
+    if (mods[i] !== "1") { i++; continue; }
+    let j = i;
+    while (j < mods.length && mods[j] === "1") j++;
+    ctx.fillRect(left + i * m, y0, (j - i) * m - thin, y1 - y0);
+    i = j;
   }
   return true;
 }
@@ -133,7 +141,7 @@ const DPMM = 8;
 // Lay items out top to bottom, centred. Spare height first widens every gap
 // evenly (up to growMax times its size); the rest is split above and below.
 function stack(ctx, cx, x0, w, y0, h, items, gaps, growMax = 2.0) {
-  const heights = items.map((it) => it[0] === "line" ? lineHeight(it[1]) : it[0] === "bar" ? it[2] : 1);
+  const heights = items.map((it) => it[0] === "line" ? lineHeight(it[1]) : it[0] === "bar" || it[0] === "qrrow" ? it[2] : 1);
   let spare = h - heights.reduce((a, b) => a + b, 0) - gaps.reduce((a, b) => a + b, 0);
   let extra = gaps.map(() => 0);
   if (spare > 0 && gaps.length) {
@@ -146,6 +154,7 @@ function stack(ctx, cx, x0, w, y0, h, items, gaps, growMax = 2.0) {
   items.forEach((it, i) => {
     if (it[0] === "line") drawLine(ctx, cx, y, it[1]);
     else if (it[0] === "bar") drawBarcode(ctx, it[1], x0, Math.round(y), x0 + w, Math.round(y + heights[i]));
+    else if (it[0] === "qrrow") drawQrRow(ctx, it[1], cx, x0, w, Math.round(y), heights[i]);
     else { ctx.fillStyle = "#000"; for (let xx = Math.round(x0); xx < x0 + w; xx += 4) ctx.fillRect(xx, Math.round(y), 1, 1); }
     y += heights[i];
     if (i < gaps.length) y += gaps[i] + extra[i];
@@ -190,8 +199,40 @@ function layoutCombined(ctx, sections, values, cx, x0, w, y0, h, unit, date, hd)
   stack(ctx, cx, x0, w, y0, h, items, gaps, 1.8);
 }
 
-// Stock label: name (big) at the top, then the location, then the stock code and its barcode.
-function layoutStock(ctx, values, cx, x0, w, y0, h, unit) {
+// QR code on the left with the code written large beside it, centred as a group.
+function qrMatrix(text) {
+  const qr = qrcode(0, "M");
+  // Capitals, digits and - . / : etc. fit in QR's compact text mode: fewer, bigger squares.
+  qr.addData(text, /^[0-9A-Z $%*+\-./:]+$/.test(text) ? "Alphanumeric" : "Byte");
+  qr.make();
+  return qr;
+}
+function drawQrRow(ctx, text, cx, x0, w, y, h) {
+  const qr = qrMatrix(text), n = qr.getModuleCount(), quiet = 2;
+  const mp = Math.max(1, Math.floor(h / (n + 2 * quiet))); // whole dots per QR square
+  const size = mp * (n + 2 * quiet);
+  const gap = Math.round(size * 0.08);
+  const run = fitRuns((s) => [[text, s, 0]], Math.round(h * 0.32), w - size - gap);
+  const tw = lineMetrics(run).width;
+  const gx = Math.round(cx - (size + gap + tw) / 2);
+  const qy = y + Math.floor((h - size) / 2);
+  ctx.fillStyle = "#000";
+  for (let r = 0; r < n; r++)
+    for (let c = 0; c < n; c++)
+      if (qr.isDark(r, c)) {
+        // Trim a dot off edges that touch a white square, so heat spread doesn't fill
+        // the white in (solid dark areas stay solid).
+        const t = mp >= 3 ? 1 : 0;
+        const w = mp - (c + 1 < n && qr.isDark(r, c + 1) ? 0 : t);
+        const hh = mp - (r + 1 < n && qr.isDark(r + 1, c) ? 0 : t);
+        ctx.fillRect(gx + (c + quiet) * mp, qy + (r + quiet) * mp, w, hh);
+      }
+  drawLine(ctx, gx + size + gap + tw / 2, y + (h - lineHeight(run)) / 2, run);
+}
+
+// Stock label: name (big) at the top, then the location, then the stock code and its
+// barcode (or a QR code with the code beside it).
+function layoutStock(ctx, values, cx, x0, w, y0, h, unit, codeStyle = "barcode") {
   const name = (values.name || "").trim() || "Item name";
   const location = (values.location || "").trim();
   const code = (values.code || "").trim();
@@ -215,7 +256,10 @@ function layoutStock(ctx, values, cx, x0, w, y0, h, unit) {
     items.push(["line", fitRuns((s) => [["Location:", Math.round(s * 0.75), Math.round(s * 0.25)], [location, s, 0]], Math.round(unit * 0.085), w)]);
     gaps.push(g);
   }
-  if (code) {
+  if (code && codeStyle === "qr") {
+    const used = items.reduce((a, it) => a + lineHeight(it[1]), 0) + gaps.reduce((a, b) => a + b, 0);
+    items.push(["qrrow", code, Math.max(0, Math.min(h - used, unit * 0.55))]);
+  } else if (code) {
     const codeLine = fitRuns((s) => [[code, s, 0]], Math.round(unit * 0.1), w);
     const used = items.reduce((a, it) => a + lineHeight(it[1]), 0) + gaps.reduce((a, b) => a + b, 0) + lineHeight(codeLine) + gIn;
     items.push(["line", codeLine]); gaps.push(gIn);
@@ -236,7 +280,7 @@ export function formatDate(d = new Date()) {
  * Returns { canvas, bitmap } - canvas is the 1-bit preview, bitmap is
  * { width, height, data } with 1 = black dot, ready for the printer.
  */
-export function renderLabel(kind, values, { widthMm = 40, heightMm = 30, rotate = false, when } = {}) {
+export function renderLabel(kind, values, { widthMm = 40, heightMm = 30, rotate = false, when, stockCode = "barcode" } = {}) {
   const W = Math.round(widthMm * DPMM), H = Math.round(heightMm * DPMM);
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
@@ -248,7 +292,7 @@ export function renderLabel(kind, values, { widthMm = 40, heightMm = 30, rotate 
   const date = [[formatDate(when), Math.max(11, Math.round(unit * 0.07)), 0]];
   const hd = lineHeight(date);
   if (kind === "stock") {
-    layoutStock(ctx, values, cx, x0, w, y0, h, unit);
+    layoutStock(ctx, values, cx, x0, w, y0, h, unit, stockCode);
   } else if (kind === "all") {
     const sections = ["order", "sumup", "tablet"].filter((s) => values[s]);
     layoutCombined(ctx, sections.length ? sections : ["order"], values, cx, x0, w, y0, h, unit, date, hd);

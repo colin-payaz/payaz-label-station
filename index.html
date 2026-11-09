@@ -224,6 +224,14 @@ tr.row:active { background: #e3f6f7; }
     </div>
   </div>
   <div class="card">
+    <h3>Stock label code</h3>
+    <div class="chips">
+      <button class="chip" data-sc="barcode">Barcode (any scanner)</button>
+      <button class="chip" data-sc="qr">QR code (camera / 2D scanners)</button>
+    </div>
+    <div class="hint">QR codes cope better if barcode lines print blurred, and scan easily with a phone camera. Basic laser scanners can't read them.</div>
+  </div>
+  <div class="card">
     <h3>Print</h3>
     <span class="stepper">Darkness <button data-d="density:-1">&minus;</button><b id="dens"></b><button data-d="density:1">+</button></span>
     <button class="chip" id="rotBtn">Flip label upside down: <span id="rotVal"></span></button>

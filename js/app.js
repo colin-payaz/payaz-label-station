@@ -32,7 +32,7 @@ const fields = () => MODES[mode].fields;
 const fieldOf = (k) => fields().find((f) => f.k === k);
 
 /* ---------- settings (saved on this tablet) ---------- */
-const DEFAULTS = { widthMm: 40, heightMm: 30, density: 4, rotate: false };
+const DEFAULTS = { widthMm: 40, heightMm: 30, density: 4, rotate: false, stockCode: "barcode" };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem("payaz-settings") || "{}")); } catch (e) {}
 function saveSettings(change) {
@@ -80,7 +80,7 @@ function setActive(k) {
 
 /* ---------- drawing ---------- */
 function makeLabel(kind, values) {
-  return renderLabel(kind, values, { widthMm: settings.widthMm, heightMm: settings.heightMm, rotate: settings.rotate });
+  return renderLabel(kind, values, { widthMm: settings.widthMm, heightMm: settings.heightMm, rotate: settings.rotate, stockCode: settings.stockCode });
 }
 let prevTimer;
 function render() {
@@ -351,6 +351,7 @@ function drawSettings() {
   $("#hmm").textContent = settings.heightMm + " mm";
   $("#dens").textContent = settings.density;
   $("#rotVal").textContent = settings.rotate ? "ON" : "OFF";
+  document.querySelectorAll("[data-sc]").forEach((b) => b.classList.toggle("on", b.dataset.sc === settings.stockCode));
   $("#sizeChips").innerHTML = PRESETS.map(([w, h]) =>
     `<button class="chip ${w == settings.widthMm && h == settings.heightMm ? "on" : ""}" data-w="${w}" data-h="${h}">${w} × ${h} mm</button>`).join("");
   $("#sizeChips").querySelectorAll("button").forEach((b) => (b.onclick = () => saveSettings({ widthMm: +b.dataset.w, heightMm: +b.dataset.h })));
@@ -359,6 +360,7 @@ document.querySelectorAll("[data-d]").forEach((b) => (b.onclick = () => {
   const [k, d] = b.dataset.d.split(":"); saveSettings({ [k]: +settings[k] + +d });
 }));
 $("#rotBtn").onclick = () => saveSettings({ rotate: !settings.rotate });
+document.querySelectorAll("[data-sc]").forEach((b) => (b.onclick = () => saveSettings({ stockCode: b.dataset.sc })));
 $("#reloadBtn").onclick = () => location.reload();
 
 document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => openMode(b.dataset.go)));
