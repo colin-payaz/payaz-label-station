@@ -254,8 +254,24 @@ $("#camClose").onclick = closeCamera;
 async function connectFromTap() {
   if (!bluetoothSupported()) throw new Error("This browser can't use Bluetooth. Open the app in Google Chrome.");
   if (printer.connected) return;
-  if (printer.known && (await printer.findKnown())) return;
+  if (printer.known && (await printer.findKnown().catch(() => false))) return;
   await printer.choose();
+}
+
+// Explain a failed connection, with the most useful next step as a button.
+function connectError(e) {
+  const msg = e && e.name === "NotFoundError" ? "No printer was chosen." : (e && e.message) || String(e);
+  if (e && e.code === "location")
+    return overlay("Location is off", msg, true, false, { label: "Open Location settings", run: () => printer.openLocationSettings() });
+  overlay("Couldn't connect", msg + " If the printer didn't appear, try showing all Bluetooth devices.", true, false,
+    { label: "Show all Bluetooth devices", run: () => chooseFrom(true) });
+}
+async function chooseFrom(showAll) {
+  overlay("Searching for printers…", "", false, true);
+  try {
+    if (printer.connected) await printer.disconnect();
+    await printer.choose(showAll); overlay("Printer connected \u2713", printer.name, false, true); setTimeout(hideOverlay, 1200);
+  } catch (e) { connectError(e); }
 }
 
 async function doPrint(kind, values, n, log = false) {
@@ -268,8 +284,8 @@ async function doPrint(kind, values, n, log = false) {
     overlay("Printed ✓", log ? "Added to the log" : "", false, true);
     return true;
   } catch (err) {
-    const msg = err && err.name === "NotFoundError" ? "No printer was chosen." : (err.message || String(err));
-    overlay("Couldn't print", msg, true);
+    if (!printer.connected && (err.code === "location" || err.code === "notfound" || err.name === "NotFoundError" || /isn't the label printer/.test(err.message))) connectError(err);
+    else overlay("Couldn't print", (err && err.message) || String(err), true);
     return false;
   }
 }
@@ -300,15 +316,10 @@ $("#pill").onclick = async () => {
   if (printer.connected) { openSettings(); return; }
   overlay("Connecting…", "", false, true);
   try { await connectFromTap(); hideOverlay(); }
-  catch (e) { overlay("Couldn't connect", e.name === "NotFoundError" ? "No printer was chosen." : e.message, true); }
+  catch (e) { connectError(e); }
 };
-$("#connectBtn").onclick = async () => {
-  overlay("Connecting…", "", false, true);
-  try {
-    if (printer.connected) await printer.disconnect();
-    await printer.choose(); hideOverlay();
-  } catch (e) { overlay("Couldn't connect", e.name === "NotFoundError" ? "No printer was chosen." : e.message, true); }
-};
+$("#connectBtn").onclick = () => chooseFrom(false);
+$("#allDevicesBtn").onclick = () => chooseFrom(true);
 $("#disconnectBtn").onclick = () => printer.disconnect();
 $("#testBtn").onclick = async () => {
   if (await doPrint("all", { order: "12345PZ", sumup: "TEST123", tablet: "TEST456" }, 1)) setTimeout(hideOverlay, 1200);

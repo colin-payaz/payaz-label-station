@@ -11,6 +11,7 @@ const WRITE_CHAR = "0000ffe9-0000-1000-8000-00805f9b34fb";
 const NOTIFY_CHAR = "0000ffe1-0000-1000-8000-00805f9b34fb";
 const NAME_PREFIX = "T0"; // printers advertise as e.g. "T0148B2507018663"
 const MAX_WRITE = 128;
+const NOT_PRINTER = "That device isn't the label printer. Choose the SUPVAN / Katasymbol printer (its name usually starts with T0).";
 const HEAD_DOTS = 384;
 const BUF_LENGTH = 4096;
 
@@ -48,8 +49,10 @@ class WebLink {
   get connected() { return !!(this.device && this.device.gatt.connected && this.writeChar); }
   get name() { return this.device ? this.device.name || "Label printer" : ""; }
   get known() { return !!this.device; }
-  async choose() {
-    const d = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: NAME_PREFIX }], optionalServices: [SERVICE] });
+  async choose(showAll = false) {
+    const d = await navigator.bluetooth.requestDevice(showAll
+      ? { acceptAllDevices: true, optionalServices: [SERVICE] }
+      : { filters: [{ namePrefix: NAME_PREFIX }], optionalServices: [SERVICE] });
     await this.open(d);
   }
   async connectKnown() {
@@ -65,7 +68,9 @@ class WebLink {
     this.device = device;
     device.addEventListener("gattserverdisconnected", this._gone);
     const server = await device.gatt.connect();
-    const service = await server.getPrimaryService(SERVICE);
+    let service;
+    try { service = await server.getPrimaryService(SERVICE); }
+    catch (e) { device.gatt.disconnect(); throw new PrinterError(NOT_PRINTER); }
     this.writeChar = await service.getCharacteristic(WRITE_CHAR);
     const notifyChar = await service.getCharacteristic(NOTIFY_CHAR);
     notifyChar.addEventListener("characteristicvaluechanged", this._notify);
@@ -93,7 +98,15 @@ class NativeLink {
   get known() { return !!this.id; }
   async init() {
     if (this.ready) return;
-    await this.ble.initialize({ androidNeverForLocation: true });
+    // Android 11 and older can only see Bluetooth devices while Location is switched on
+    const m = /Android (\d+)/.exec(navigator.userAgent);
+    const oldAndroid = m && +m[1] < 12;
+    await this.ble.initialize({ androidNeverForLocation: !oldAndroid });
+    if (oldAndroid) {
+      let on = true;
+      try { on = (await this.ble.isLocationEnabled()).value; } catch (e) {}
+      if (!on) { const err = new PrinterError("Turn on Location so the tablet can find the printer (Android needs it for Bluetooth)."); err.code = "location"; throw err; }
+    }
     const { value } = await this.ble.isEnabled();
     if (!value) {
       try { await this.ble.requestEnable(); } catch (e) {}
@@ -101,11 +114,24 @@ class NativeLink {
     }
     this.ready = true;
   }
-  async choose() {
+  async choose(showAll = false) {
     await this.init();
-    const d = await this.ble.requestDevice({ namePrefix: NAME_PREFIX, optionalServices: [SERVICE] });
-    await this.open(d.deviceId, d.name || "");
+    let d;
+    try {
+      d = await this.ble.requestDevice(showAll ? { optionalServices: [SERVICE] } : { namePrefix: NAME_PREFIX, optionalServices: [SERVICE] });
+    } catch (e) {
+      const err = new PrinterError(/cancel/i.test(e && e.message) ? "No printer was chosen." : (e && e.message) || "Bluetooth search failed");
+      err.code = "notfound"; throw err;
+    }
+    try { await this.open(d.deviceId, d.name || ""); }
+    catch (e) {
+      try { await this.ble.disconnect({ deviceId: d.deviceId }); } catch (x) {}
+      this.isConnected = false;
+      throw e instanceof PrinterError ? e : new PrinterError(NOT_PRINTER);
+    }
   }
+  openLocationSettings() { return this.ble.openLocationSettings(); }
+  openAppSettings() { return this.ble.openAppSettings(); }
   async connectKnown() {
     if (!this.id) return false;
     await this.init();
@@ -272,8 +298,10 @@ export class Printer {
   /** A printer has been chosen before (so no chooser is needed to reconnect). */
   get known() { return this.link.known; }
 
-  /** Show the printer chooser. On the web it must be called straight from a tap. */
-  async choose() { await this.link.choose(); await this._afterConnect(); }
+  /** Show the printer chooser. On the web it must be called straight from a tap.
+   *  showAll lists every Bluetooth device, in case the printer has an unusual name. */
+  async choose(showAll = false) { await this.link.choose(showAll); await this._afterConnect(); }
+  openLocationSettings() { return this.link.openLocationSettings ? this.link.openLocationSettings() : null; }
 
   /** Reconnect to the printer chosen before, without the chooser. */
   async findKnown() {
