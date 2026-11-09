@@ -58,6 +58,11 @@ jobs:
       - name: Name the APK
         run: cp android/app/build/outputs/apk/release/app-release.apk payaz-labels.apk
 
+      - name: Show the app's Bluetooth permissions
+        run: |
+          AAPT2=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)aapt2
+          $AAPT2 dump xmltree --file AndroidManifest.xml payaz-labels.apk | grep -B1 -A4 "BLUETOOTH_SCAN\|LOCATION" || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: payaz-labels-apk
