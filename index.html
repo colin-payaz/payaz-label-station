@@ -40,10 +40,33 @@ header .icon-btn { background: rgba(255,255,255,.2); color: #fff; height: 52px; 
 #home.on { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 16px; }
 .big { color: #fff; font-size: 32px; font-weight: 900; text-align: left; padding: 24px 28px; display: flex; flex-direction: column; justify-content: flex-end; line-height: 1.1; }
 .big small { display: block; font-size: 17px; font-weight: 500; margin-top: 8px; opacity: .92; }
+.big.log    { background: linear-gradient(135deg, var(--purple), var(--navy)); }
+.big.stockx { background: linear-gradient(135deg, #8b97a8, #5d6b82); position: relative; }
+.big.stockl { background: linear-gradient(135deg, var(--teal), #1f8fbf); }
 .big.order  { background: linear-gradient(135deg, var(--green), #3fae5e); }
-.big.sumup  { background: linear-gradient(135deg, var(--teal), #1f8fbf); }
-.big.tablet { background: linear-gradient(135deg, var(--blue), var(--teal)); }
-.big.all    { background: linear-gradient(135deg, var(--purple), var(--navy)); }
+.big .soon { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,.25); border-radius: 99px; padding: 6px 14px; font-size: 15px; font-weight: 700; }
+
+/* Log */
+#log { flex-direction: column; gap: 12px; }
+.logbar { display: flex; gap: 10px; align-items: stretch; }
+.search { flex: 1; background: var(--card); border: 3px solid var(--line); border-radius: var(--r); padding: 0 16px; display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; text-align: left; min-height: 60px; }
+.search .ph { color: #b4bfcc; font-weight: 500; }
+.logbar .chip { white-space: nowrap; }
+.count { color: var(--muted); font-weight: 700; font-size: 15px; }
+.tablewrap { flex: 1; overflow: auto; background: var(--card); border-radius: var(--r); -webkit-overflow-scrolling: touch; }
+table { width: 100%; border-collapse: collapse; font-size: 17px; }
+th { position: sticky; top: 0; background: #eef2f6; text-align: left; padding: 12px 14px; font-size: 14px; color: var(--muted); white-space: nowrap; }
+td { padding: 12px 14px; border-top: 1px solid var(--line); font-weight: 700; white-space: nowrap; }
+td.exp { color: #b3263a; }
+tr.row:active { background: #e3f6f7; }
+.empty-log { padding: 40px; text-align: center; color: var(--muted); font-size: 18px; }
+
+/* Typing pop-up */
+#typer { position: fixed; inset: 0; background: rgba(31,26,92,.55); display: none; align-items: flex-end; justify-content: center; z-index: 8; }
+#typer.on { display: flex; }
+#typer .sheet { background: #fff; width: 100%; max-width: 900px; border-radius: 20px 20px 0 0; padding: 16px; display: flex; flex-direction: column; gap: 10px; height: 62%; }
+#typer .shown { font-size: 26px; font-weight: 900; padding: 8px 14px; background: #eef2f6; border-radius: var(--r); min-height: 52px; }
+#typer .kbd { display: flex; }
 
 #edit { gap: 18px; }
 .left { width: 40%; max-width: 460px; display: flex; flex-direction: column; gap: 8px; }
@@ -107,6 +130,8 @@ header .icon-btn { background: rgba(255,255,255,.2); color: #fff; height: 52px; 
 #overlay .msg { font-size: 30px; font-weight: 900; }
 #overlay .sub { font-size: 18px; color: var(--muted); margin-top: 10px; }
 #overlay .box.err .msg { color: #b3263a; }
+#overlay .btnrow { display: flex; gap: 12px; justify-content: center; }
+#overlay .btnrow button.alt { background: #eef2f6; color: var(--ink); }
 #overlay button { margin-top: 22px; background: var(--navy); color: #fff; font-weight: 700; font-size: 22px; padding: 16px 48px; }
 
 #camera { position: fixed; inset: 0; background: #000; display: none; z-index: 10; }
@@ -127,10 +152,10 @@ header .icon-btn { background: rgba(255,255,255,.2); color: #fff; height: 52px; 
 </header>
 
 <section id="home" class="screen on">
-  <button class="big order"  data-go="order">Payaz Order<small>Type the order number</small></button>
-  <button class="big sumup"  data-go="sumup">SumUp Card Reader<small>Scan the reader's barcode</small></button>
-  <button class="big tablet" data-go="tablet">Tablet<small>Scan the tablet's serial barcode</small></button>
-  <button class="big all"    data-go="all">Print All<small>Order, reader and tablet on one label</small></button>
+  <button class="big log"    id="goLog">Log<small>Every order label printed, with warranty dates</small></button>
+  <button class="big stockx" id="goStock">Stock<span class="soon">Coming soon</span><small>Stock control</small></button>
+  <button class="big stockl" data-go="stock">Stock Label<small>Name, location and stock code barcode</small></button>
+  <button class="big order"  data-go="order">Order Label<small>Order number, card reader and tablet</small></button>
 </section>
 
 <section id="edit" class="screen">
@@ -165,6 +190,19 @@ header .icon-btn { background: rgba(255,255,255,.2); color: #fff; height: 52px; 
   </div>
 </section>
 
+<section id="log" class="screen">
+  <div class="logbar">
+    <button class="search" id="searchBtn"><span>&#128269;</span><span id="searchText"></span></button>
+    <button class="chip" id="clearSearch" style="display:none">Clear</button>
+    <button class="chip primary" id="exportBtn">Export CSV</button>
+  </div>
+  <div class="count" id="logCount"></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Payaz Order Number</th><th>Date</th><th>Card Reader</th><th>Tablet</th><th>Warranty Expires</th></tr></thead>
+    <tbody id="logBody"></tbody>
+  </table><div class="empty-log" id="logEmpty"></div></div>
+</section>
+
 <section id="settings" class="screen">
   <div class="card">
     <h3>Printer</h3>
@@ -192,7 +230,8 @@ header .icon-btn { background: rgba(255,255,255,.2); color: #fff; height: 52px; 
   </div>
 </section>
 
-<div id="overlay"><div class="box" id="ovBox"><div class="msg" id="ovMsg"></div><div class="sub" id="ovSub"></div><button id="ovBtn">OK</button></div></div>
+<div id="typer"><div class="sheet"><div class="shown" id="typerShown"></div><div class="kbd" id="typerKbd"></div></div></div>
+<div id="overlay"><div class="box" id="ovBox"><div class="msg" id="ovMsg"></div><div class="sub" id="ovSub"></div><div class="btnrow"><button id="ovAlt" class="alt" style="display:none"></button><button id="ovBtn">OK</button></div></div></div>
 <div id="camera"><video id="video" playsinline muted></video><div class="frame"></div><div class="msg">Point the camera at the barcode</div><button id="camClose">Cancel</button></div>
 
 <script type="module" src="js/app.js"></script>

@@ -1,14 +1,35 @@
 import { renderLabel, LABEL_FONT } from "./labels.js";
 import { Printer, bluetoothSupported, isNativeApp } from "./printer.js";
+import { loadLog, addLogEntry, deleteLogEntry, logRow, exportCsv } from "./log.js";
 
 const $ = (s) => document.querySelector(s);
-const TITLES = { order: "Payaz Order", sumup: "SumUp Card Reader", tablet: "Tablet", all: "Combined label" };
-const FIELD_LABEL = { order: "Payaz Order Number:", sumup: "SumUp Card Reader:", tablet: "Tablet Serial Number:" };
-const PLACEHOLDER = { order: "Type the number", sumup: "Scan the reader", tablet: "Scan the tablet" };
-const FIELDS = ["order", "sumup", "tablet"];
-const vals = { order: "", sumup: "", tablet: "" };
-let active = null, copies = 1, typing = false, idleTimer = null;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const printer = new Printer();
+
+// The two label screens. Box types: "pad" = number keypad (with PZ),
+// "scan" = barcode scanner/camera (or type it), "text" = on-screen keyboard.
+const MODES = {
+  order: {
+    title: "Order Label", logged: true,
+    fields: [
+      { k: "order", label: "Payaz Order Number:", ph: "Type the number", type: "pad" },
+      { k: "sumup", label: "SumUp Card Reader:", ph: "Scan the reader", type: "scan" },
+      { k: "tablet", label: "Tablet Serial Number:", ph: "Scan the tablet", type: "scan" },
+    ],
+  },
+  stock: {
+    title: "Stock Label", logged: false,
+    fields: [
+      { k: "name", label: "Name:", ph: "Tap here, then type the name", type: "text" },
+      { k: "location", label: "Location:", ph: "Tap here, then type the location", type: "text" },
+      { k: "code", label: "Stock Code:", ph: "Scan or type the code", type: "scan" },
+    ],
+  },
+};
+const vals = { order: "", sumup: "", tablet: "", name: "", location: "", code: "" };
+let mode = "order", active = null, copies = 1, typing = false, caseMode = "Abc", idleTimer = null;
+const fields = () => MODES[mode].fields;
+const fieldOf = (k) => fields().find((f) => f.k === k);
 
 /* ---------- settings (saved on this tablet) ---------- */
 const DEFAULTS = { widthMm: 40, heightMm: 30, density: 4, rotate: false };
@@ -31,49 +52,55 @@ function show(id) {
   $("#pill").style.display = id === "home" ? "" : "none";
 }
 function home() {
-  FIELDS.forEach((k) => (vals[k] = ""));
+  Object.keys(vals).forEach((k) => (vals[k] = ""));
   copies = 1;
   $("#hdrTitle").textContent = "Label Station";
   show("home");
 }
-// One box filled -> that label on its own; two or three -> one combined label.
+// Order labels: one box filled -> that label on its own; two or three -> one combined label.
 function printKind() {
-  const filled = FIELDS.filter((f) => vals[f]);
+  if (mode === "stock") return "stock";
+  const filled = ["order", "sumup", "tablet"].filter((f) => vals[f]);
   return filled.length > 1 ? "all" : filled[0] || active;
 }
-function openKind(k) {
-  copies = 1; typing = false;
-  $("#fields").innerHTML = FIELDS.map((f) =>
-    `<button class="field" data-f="${f}"><div class="lbl">${FIELD_LABEL[f]}</div><div class="val"></div></button>`).join("");
+const canPrint = () => mode === "stock" ? !!(vals.name || vals.code) : ["order", "sumup", "tablet"].some((f) => vals[f]);
+function openMode(m) {
+  mode = m; copies = 1; typing = false;
+  $("#fields").innerHTML = fields().map((f) =>
+    `<button class="field" data-f="${f.k}"><div class="lbl">${f.label}</div><div class="val"></div></button>`).join("");
   $("#fields").querySelectorAll(".field").forEach((b) => (b.onclick = () => setActive(b.dataset.f)));
   $("#fields").style.cssText = "display:flex;flex-direction:column;gap:8px";
-  setActive(k === "all" ? "order" : k);
+  setActive(fields()[0].k);
   show("edit"); poke();
 }
-function setActive(f) { active = f; typing = false; render(); }
+function setActive(k) {
+  active = k; typing = false;
+  render();
+}
 
 /* ---------- drawing ---------- */
-const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function makeLabel(kind, values) {
   return renderLabel(kind, values, { widthMm: settings.widthMm, heightMm: settings.heightMm, rotate: settings.rotate });
 }
 let prevTimer;
 function render() {
   document.querySelectorAll(".field").forEach((b) => {
-    const f = b.dataset.f, v = b.querySelector(".val");
-    b.classList.toggle("active", f === active);
-    v.textContent = vals[f] || PLACEHOLDER[f];
-    v.classList.toggle("empty", !vals[f]);
-    if (f === "sumup" && vals[f].length > 3)
-      v.innerHTML = `<span style="font-weight:500">${esc(vals[f].slice(0, -3))}</span>${esc(vals[f].slice(-3))}`;
+    const f = fieldOf(b.dataset.f), v = b.querySelector(".val"), val = vals[f.k];
+    b.classList.toggle("active", f.k === active);
+    v.textContent = val || f.ph;
+    v.classList.toggle("empty", !val);
+    if (f.k === "sumup" && val.length > 3)
+      v.innerHTML = `<span style="font-weight:500">${esc(val.slice(0, -3))}</span>${esc(val.slice(-3))}`;
   });
-  const isOrder = active === "order";
-  $("#keypad").style.display = isOrder ? "grid" : "none";
-  $("#scan").style.display = !isOrder && !typing ? "flex" : "none";
-  $("#kbd").style.display = !isOrder && typing ? "flex" : "none";
+  const type = fieldOf(active).type;
+  $("#keypad").style.display = type === "pad" ? "grid" : "none";
+  $("#scan").style.display = type === "scan" && !typing ? "flex" : "none";
+  const kbdOn = type === "text" || (type === "scan" && typing);
+  $("#kbd").style.display = kbdOn ? "flex" : "none";
+  if (kbdOn) buildKbd($("#kbd"), { scanKey: type === "scan" });
   $("#copies").textContent = copies;
-  $("#printBtn").disabled = !FIELDS.some((f) => vals[f]);
-  $("#hdrTitle").textContent = TITLES[printKind()];
+  $("#printBtn").disabled = !canPrint();
+  $("#hdrTitle").textContent = mode === "stock" ? "Stock Label" : printKind() === "all" ? "Order Label (combined)" : "Order Label";
   clearTimeout(prevTimer);
   prevTimer = setTimeout(() => {
     const { canvas } = makeLabel(printKind(), vals);
@@ -81,51 +108,95 @@ function render() {
   }, 60);
 }
 
-/* ---------- input ---------- */
+/* ---------- typing ---------- */
+const maxLen = (k) => (k === "order" ? 30 : 40);
 function press(key) {
   poke();
+  const f = fieldOf(active);
   let v = vals[active];
   if (key === "DEL") v = v.slice(0, -1);
+  else if (key === "CASE") { caseMode = nextCase(); render(); return; }
   else if (key === "PZ") { if (!v.endsWith("PZ")) v += "PZ"; }
-  else if (v.length < 30) { if (active === "order" && v.endsWith("PZ")) return; v += key; }
+  else if (v.length < maxLen(active)) {
+    if (active === "order" && v.endsWith("PZ")) return;
+    if (key === "SPACE") key = " ";
+    if (f.type !== "text") key = key.toUpperCase();
+    else if (/^[a-z]$/i.test(key)) key = capsNext(v) ? key.toUpperCase() : key.toLowerCase();
+    if (key === " " && (!v || v.endsWith(" "))) return;
+    v += key;
+  }
   vals[active] = v; render();
 }
 $("#keypad").onclick = (e) => { const b = e.target.closest("button"); if (b) press(b.dataset.k || b.textContent); };
 
-const ROWS = ["1234567890", "QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM"];
-$("#kbd").innerHTML = ROWS.map((r, i) => `<div class="row">${[...r].map((c) => `<button>${c}</button>`).join("")}${
-  i === 3 ? '<button class="wide del" data-k="DEL">&#9003;</button><button class="wide" data-k="SCAN">Scan instead</button>' : ""}</div>`).join("");
+// Letter case for typed names: "Abc" = capital at the start of each word (default),
+// "ABC" = all capitals, "abc" = all small.
+const nextCase = () => ({ Abc: "ABC", ABC: "abc", abc: "Abc" })[caseMode];
+const capsNext = (v) => caseMode === "ABC" || (caseMode === "Abc" && (!v || /[\s\-\/.]$/.test(v)));
+
+// On-screen keyboard (letters, numbers, space and a few symbols)
+const ROWS = ["1234567890", "QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM/."];
+function buildKbd(el, { scanKey = false, doneKey = false, current = null } = {}) {
+  const typed = current !== null ? current : active && fieldOf(active).type === "text" ? vals[active] : "";
+  const big = current === null && active && fieldOf(active).type !== "text" ? true : capsNext(typed);
+  const shown = (c) => (/[A-Z]/.test(c) && !big ? c.toLowerCase() : c);
+  el.innerHTML = ROWS.map((r) => `<div class="row">${[...r].map((c) => `<button data-c="${c}">${shown(c)}</button>`).join("")}</div>`).join("") +
+    `<div class="row"><button class="wide" data-k="CASE">${caseMode}</button>` +
+    `<button style="flex:4" data-k="SPACE">space</button><button class="wide del" data-k="DEL">&#9003;</button>` +
+    (scanKey ? `<button class="wide" data-k="SCAN">Scan instead</button>` : "") +
+    (doneKey ? `<button class="wide" data-k="DONE" style="background:var(--teal);color:#fff">Done</button>` : "") + `</div>`;
+}
 $("#kbd").onclick = (e) => {
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.k === "SCAN") { typing = false; render(); } else press(b.dataset.k || b.textContent);
+  if (b.dataset.k === "SCAN") { typing = false; render(); } else press(b.dataset.k || b.dataset.c);
 };
 $("#typeBtn").onclick = () => { typing = true; render(); };
 
-// Put a scanned code in the right box, then move on to the next empty scan box.
+// Put a scanned code in the right box.
 function acceptScan(code) {
-  code = code.trim().toUpperCase().replace(/[^\x20-\x7E]/g, "").slice(0, 40);
+  code = code.trim().replace(/[^\x20-\x7E]/g, "").slice(0, 40);
   if (!active || code.length < 2) return;
-  let target = active;
-  if (target === "order") target = !vals.sumup ? "sumup" : "tablet";
-  vals[target] = code;
-  active = ["sumup", "tablet"].find((f) => !vals[f]) || target;
+  if (mode === "stock") {
+    vals.code = code;
+    active = !vals.name ? "name" : !vals.location ? "location" : "code";
+  } else {
+    code = code.toUpperCase();
+    let target = active;
+    if (target === "order") target = !vals.sumup ? "sumup" : "tablet";
+    vals[target] = code;
+    active = ["sumup", "tablet"].find((f) => !vals[f]) || target; // next empty scan box
+  }
   typing = false; poke(); render();
 }
 
-// Barcode scanner (USB or Bluetooth): it "types" very fast then presses Enter.
+// Barcode scanner (USB or Bluetooth) "types" very fast then presses Enter.
+// Slower key presses (a real keyboard) go into the box being edited.
 let buf = "", bufTimer = null;
-function commitScan() { clearTimeout(bufTimer); const code = buf; buf = ""; acceptScan(code); }
-document.addEventListener("keydown", (e) => {
-  if (!$("#edit").classList.contains("on")) return;
-  if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); if (buf) commitScan(); return; }
-  if (active === "order" && buf === "") {
-    if (/^[0-9]$/.test(e.key)) { press(e.key); return; }
-    if (e.key === "Backspace") { press("DEL"); return; }
-  }
+function keyInput(e, { onScan, onType, onDelete }) {
+  if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); clearTimeout(bufTimer); if (buf) { const c = buf; buf = ""; onScan(c); } return; }
+  if (e.key === "Backspace" && !buf) { onDelete(); return; }
   if (e.key.length === 1) {
     buf += e.key; clearTimeout(bufTimer);
-    bufTimer = setTimeout(() => { if (buf.length >= 4) commitScan(); else buf = ""; }, 150);
+    bufTimer = setTimeout(() => { const c = buf; buf = ""; onType(c); }, 150);
   }
+}
+document.addEventListener("keydown", (e) => {
+  if ($("#typer").classList.contains("on")) return;
+  if ($("#log").classList.contains("on")) {
+    keyInput(e, { onScan: (c) => setSearch(c.trim()), onType: (c) => setSearch(search + c), onDelete: () => setSearch(search.slice(0, -1)) });
+    return;
+  }
+  if (!$("#edit").classList.contains("on")) return;
+  const type = fieldOf(active).type;
+  keyInput(e, {
+    onScan: acceptScan,
+    onType: (c) => {
+      if (type === "scan" && c.length >= 4) return acceptScan(c); // scanner without Enter
+      if (type === "scan" && !typing) return;
+      for (const ch of c) if (type !== "pad" || /[0-9]/.test(ch)) press(ch === " " ? "SPACE" : ch);
+    },
+    onDelete: () => press("DEL"),
+  });
 });
 
 /* ---------- camera scanning ---------- */
@@ -187,13 +258,14 @@ async function connectFromTap() {
   await printer.choose();
 }
 
-async function doPrint(kind, values, n) {
+async function doPrint(kind, values, n, log = false) {
   overlay("Connecting…", "", false, true);
   try {
     if (!printer.connected) await connectFromTap();
     const { bitmap } = makeLabel(kind, values);
     await printer.print(bitmap, { copies: n, density: settings.density, onProgress: (m) => overlay(m, "", false, true) });
-    overlay("Printed ✓", "", false, true);
+    if (log) addLogEntry(values);
+    overlay("Printed ✓", log ? "Added to the log" : "", false, true);
     return true;
   } catch (err) {
     const msg = err && err.name === "NotFoundError" ? "No printer was chosen." : (err.message || String(err));
@@ -203,7 +275,10 @@ async function doPrint(kind, values, n) {
 }
 
 $("#printBtn").onclick = async () => {
-  if (await doPrint(printKind(), { ...vals }, copies)) setTimeout(() => { hideOverlay(); home(); }, 1200);
+  const values = mode === "stock"
+    ? { name: vals.name, location: vals.location, code: vals.code }
+    : { order: vals.order, sumup: vals.sumup, tablet: vals.tablet };
+  if (await doPrint(printKind(), values, copies, MODES[mode].logged)) setTimeout(() => { hideOverlay(); home(); }, 1200);
 };
 $("#clearBtn").onclick = () => { vals[active] = ""; render(); };
 $("#cMinus").onclick = () => { copies = Math.max(1, copies - 1); render(); };
@@ -246,10 +321,13 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* ---------- overlay ---------- */
-function overlay(msg, sub, isErr, noBtn) {
+function overlay(msg, sub, isErr, noBtn, alt) {
   $("#ovMsg").textContent = msg; $("#ovSub").textContent = sub || "";
   $("#ovBox").classList.toggle("err", !!isErr);
   $("#ovBtn").style.display = noBtn ? "none" : ""; $("#overlay").classList.add("on");
+  $("#ovBtn").textContent = alt ? "Cancel" : "OK";
+  $("#ovAlt").style.display = alt ? "" : "none";
+  if (alt) { $("#ovAlt").textContent = alt.label; $("#ovAlt").onclick = () => { hideOverlay(); alt.run(); }; }
 }
 function hideOverlay() { $("#overlay").classList.remove("on"); }
 $("#ovBtn").onclick = hideOverlay;
@@ -272,7 +350,56 @@ document.querySelectorAll("[data-d]").forEach((b) => (b.onclick = () => {
 $("#rotBtn").onclick = () => saveSettings({ rotate: !settings.rotate });
 $("#reloadBtn").onclick = () => location.reload();
 
-document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => openKind(b.dataset.go)));
+document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => openMode(b.dataset.go)));
+$("#goStock").onclick = () => overlay("Coming soon", "Stock control is on its way.");
+$("#goLog").onclick = openLog;
+
+/* ---------- log screen ---------- */
+let search = "";
+function openLog() { search = ""; $("#hdrTitle").textContent = "Log"; show("log"); drawLog(); poke(); }
+function setSearch(v) { search = v.slice(0, 40); drawLog(); poke(); }
+function drawLog() {
+  const q = search.trim().toLowerCase();
+  const all = loadLog().slice().reverse(); // newest first
+  const rows = all.filter((e) => !q || [e.order, e.sumup, e.tablet].some((v) => (v || "").toLowerCase().includes(q)));
+  $("#searchText").innerHTML = search ? `<b>${esc(search)}</b>` : '<span class="ph">Scan or tap to search (order, reader or tablet)</span>';
+  $("#clearSearch").style.display = search ? "" : "none";
+  $("#logCount").textContent = q ? `${rows.length} of ${all.length} labels` : `${all.length} label${all.length === 1 ? "" : "s"} printed`;
+  $("#logBody").innerHTML = rows.map((e) => {
+    const r = logRow(e);
+    return `<tr class="row" data-ts="${esc(e.ts)}"><td>${esc(r.order || "-")}</td><td>${r.date}</td><td>${esc(r.sumup || "-")}</td>` +
+      `<td>${esc(r.tablet || "-")}</td><td class="${r.expired ? "exp" : ""}">${r.warranty}${r.expired ? " (expired)" : ""}</td></tr>`;
+  }).join("");
+  $("#logEmpty").textContent = rows.length ? "" : all.length ? "Nothing matches that search." : "No labels printed yet. Order labels appear here when you print them.";
+  $("#logBody").querySelectorAll("tr").forEach((tr) => (tr.onclick = () => {
+    const e = all.find((x) => x.ts === tr.dataset.ts), r = logRow(e);
+    overlay(`Order ${r.order || "(none)"}`, `Printed ${r.date} · Reader ${r.sumup || "-"} · Tablet ${r.tablet || "-"} · Warranty until ${r.warranty}`, false, false,
+      { label: "Delete this entry", run: () => { deleteLogEntry(e.ts); drawLog(); } });
+  }));
+}
+$("#clearSearch").onclick = () => setSearch("");
+$("#exportBtn").onclick = async () => {
+  if (!loadLog().length) { overlay("Nothing to export yet", "Print an order label first."); return; }
+  try { await exportCsv(); }
+  catch (e) { if (!/cancel/i.test(e && e.message)) overlay("Couldn't export", (e && e.message) || String(e), true); }
+};
+// Search typing pop-up
+$("#searchBtn").onclick = () => { drawTyper(); $("#typer").classList.add("on"); };
+function drawTyper() {
+  $("#typerShown").textContent = search || " ";
+  buildKbd($("#typerKbd"), { doneKey: true, current: search });
+}
+$("#typerKbd").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const k = b.dataset.k, c = b.dataset.c;
+  if (k === "DONE") { $("#typer").classList.remove("on"); return; }
+  if (k === "CASE") caseMode = nextCase();
+  else if (k === "DEL") setSearch(search.slice(0, -1));
+  else if (k === "SPACE") setSearch(search + " ");
+  else setSearch(search + (capsNext(search) ? c : c.toLowerCase()));
+  drawTyper();
+};
+$("#typer").onclick = (e) => { if (e.target.id === "typer") $("#typer").classList.remove("on"); };
 $("#backBtn").onclick = home;
 $("#setBtn").onclick = openSettings;
 
@@ -298,4 +425,4 @@ const face = new FontFace(LABEL_FONT, "url(fonts/AtkinsonHyperlegible-Bold.ttf)"
 face.load().then((f) => document.fonts.add(f)).catch(() => {}).finally(() => { if (active) render(); });
 
 // For automated tests
-window.__payaz = { renderLabel, printer, vals };
+window.__payaz = { renderLabel, printer, vals, loadLog };

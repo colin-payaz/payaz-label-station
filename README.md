@@ -69,16 +69,18 @@ icon and choose **Pin**.
 
 ## Using it
 
-| Button | What you do | What prints |
-|---|---|---|
-| **Payaz Order** | Type the number (tap **PZ** for numbers like 48374PZ) | "Payaz Order Number:", the number, a small barcode and the date |
-| **SumUp Card Reader** | Scan the reader | The number with the **last 3 digits large**, a barcode and the date |
-| **Tablet** | Scan the tablet's serial | "Tablet Serial Number:", the serial, a barcode and the date |
-| **Print All** | Fill in any or all three | Everything you filled in, on one label |
+| Button | What it does |
+|---|---|
+| **Log** | Every Order Label printed: order number, date, card reader, tablet and **warranty expiry** (12 months after printing; expired dates show in red). Scan or type a serial to find it, tap a row to delete it, and **Export CSV** to email it or save it to Drive. |
+| **Stock** | Coming soon. |
+| **Stock Label** | Type the item **name** and **location**, then scan or type the **stock code**. Prints the name at the top, the location, then the code and its barcode. |
+| **Order Label** | Type the order number (tap **PZ** for numbers like 48374PZ) and scan the card reader and/or tablet. One box filled prints that on its own; two or three print one combined label. Each one is added to the Log. |
 
-Every screen shows all three boxes. One box filled gives that label on its own;
-two or three give one combined label. **⚙ Settings** has the label size, print darkness
-(1–9), flip upside down and the test print.
+The log is saved on the tablet. In the Android app it's also copied to
+**Documents/PayazLabels/payaz-label-log.csv** after every print, so you can find it with the
+Files app. Uninstalling the app deletes the in-app log, so export it first.
+
+**⚙ Settings** has the label size, print darkness (1–9), flip upside down and the test print.
 
 ## If something goes wrong
 

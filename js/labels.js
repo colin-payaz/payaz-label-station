@@ -190,6 +190,42 @@ function layoutCombined(ctx, sections, values, cx, x0, w, y0, h, unit, date, hd)
   stack(ctx, cx, x0, w, y0, h, items, gaps, 1.8);
 }
 
+// Stock label: name (big) at the top, then the location, then the stock code and its barcode.
+function layoutStock(ctx, values, cx, x0, w, y0, h, unit) {
+  const name = (values.name || "").trim() || "Item name";
+  const location = (values.location || "").trim();
+  const code = (values.code || "").trim();
+  const g = Math.round(unit * 0.045), gIn = Math.round(unit * 0.025);
+  // Name: one line if it stays big enough, otherwise split onto two lines
+  let nameLines = [fitRuns((s) => [[name, s, 0]], Math.round(unit * 0.15), w)];
+  if (nameLines[0][0][1] < unit * 0.1 && name.includes(" ")) {
+    const words = name.split(/\s+/);
+    let best = 1, bestDiff = Infinity;
+    for (let i = 1; i < words.length; i++) {
+      const d = Math.abs(words.slice(0, i).join(" ").length - words.slice(i).join(" ").length);
+      if (d < bestDiff) { bestDiff = d; best = i; }
+    }
+    const parts = [words.slice(0, best).join(" "), words.slice(best).join(" ")];
+    const size = Math.min(...parts.map((p) => fitRuns((s) => [[p, s, 0]], Math.round(unit * 0.13), w)[0][1]));
+    nameLines = parts.map((p) => [[p, size, 0]]);
+  }
+  const items = [], gaps = [];
+  nameLines.forEach((l, i) => { items.push(["line", l]); gaps.push(i < nameLines.length - 1 ? Math.round(unit * 0.02) : g); });
+  if (location) {
+    items.push(["line", fitRuns((s) => [["Location:", Math.round(s * 0.75), Math.round(s * 0.25)], [location, s, 0]], Math.round(unit * 0.085), w)]);
+    gaps.push(g);
+  }
+  if (code) {
+    const codeLine = fitRuns((s) => [[code, s, 0]], Math.round(unit * 0.1), w);
+    const used = items.reduce((a, it) => a + lineHeight(it[1]), 0) + gaps.reduce((a, b) => a + b, 0) + lineHeight(codeLine) + gIn;
+    items.push(["line", codeLine]); gaps.push(gIn);
+    items.push(["bar", code, Math.max(0, Math.min(h - used, unit * 0.3))]);
+  } else {
+    gaps.pop();
+  }
+  stack(ctx, cx, x0, w, y0, h, items, gaps);
+}
+
 export function formatDate(d = new Date()) {
   const p = (n) => String(n).padStart(2, "0");
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
@@ -211,7 +247,9 @@ export function renderLabel(kind, values, { widthMm = 40, heightMm = 30, rotate 
   const unit = Math.min(H, W * 0.75);
   const date = [[formatDate(when), Math.max(11, Math.round(unit * 0.07)), 0]];
   const hd = lineHeight(date);
-  if (kind === "all") {
+  if (kind === "stock") {
+    layoutStock(ctx, values, cx, x0, w, y0, h, unit);
+  } else if (kind === "all") {
     const sections = ["order", "sumup", "tablet"].filter((s) => values[s]);
     layoutCombined(ctx, sections.length ? sections : ["order"], values, cx, x0, w, y0, h, unit, date, hd);
   } else {
